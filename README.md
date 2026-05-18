@@ -1,0 +1,57 @@
+# Meal Tracking Agent
+
+A Telegram-based meal tracking agent that analyzes food photos, logs meals, estimates calories and macros, and sends daily and monthly progress summaries.
+
+## Features
+
+- Photo-based meal tracking from Telegram
+- Claude-powered meal analysis and nutrition estimates
+- LangGraph ReAct chat with memory, tools, and lightweight retrieval
+- Onboarding flow for personal goals and profile setup
+- SQLite meal logging and user profiles
+- Daily 11 PM progress report
+- Monthly summary reports
+
+## Project Structure
+
+- `src/meal_tracking_agent/config.py` — environment configuration
+- `src/meal_tracking_agent/db.py` — database setup and repositories
+- `src/meal_tracking_agent/models.py` — data models and enums
+- `src/meal_tracking_agent/nutrition.py` — calorie and macro calculations
+- `src/meal_tracking_agent/anthropic_client.py` — Claude integration
+- `src/meal_tracking_agent/chat_graph.py` — LangGraph ReAct chat assistant
+- `src/meal_tracking_agent/knowledge_base.py` — local retrieval knowledge base for nutrition guidance
+- `src/meal_tracking_agent/telegram_bot.py` — Telegram bot handlers
+- `src/meal_tracking_agent/scheduler.py` — daily report scheduling
+- `src/meal_tracking_agent/main.py` — application entry point
+
+## Setup
+
+1. Create and activate a Python 3.11+ virtual environment.
+2. Install dependencies:
+
+```bash
+pip install -e .
+```
+
+3. Copy `.env.example` to `.env` and fill in your tokens.
+4. Start the bot:
+
+```bash
+python -m meal_tracking_agent.main
+```
+
+## Telegram Bot Flow
+
+- `/start` begins onboarding
+- The bot collects name, goal, gender, age, height, weight, and activity level
+- Photos are analyzed and logged as meals
+- Normal text messages are routed to a LangGraph ReAct agent
+- `/today` returns the current day’s summary
+- `/month` returns a monthly summary
+
+## Notes
+
+- The Claude integration is implemented as a clean abstraction so you can swap in your preferred prompt and image payload format.
+- The scheduler is designed for an 11 PM daily progress report in the configured timezone.
+- This scaffold uses SQLite by default, but you can switch `DATABASE_URL` to Postgres later.
