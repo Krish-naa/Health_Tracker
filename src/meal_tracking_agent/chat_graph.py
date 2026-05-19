@@ -33,20 +33,23 @@ class LangGraphChatService:
         if model is None:
             return self._fallback_reply(user_text)
 
-        agent = create_react_agent(
-            model=model,
-            tools=self._build_tools(session=session, user_id=user_id),
-            prompt=self._system_prompt(profile),
-            checkpointer=self.memory,
-        )
-        result = agent.invoke(
-            {"messages": [HumanMessage(content=user_text)]},
-            config={"configurable": {"thread_id": thread_id}},
-        )
-        messages = result.get("messages", [])
-        if not messages:
-            return "I'm here, but I couldn't generate a reply."
-        return str(getattr(messages[-1], "content", "")).strip() or "I'm here, but I couldn't generate a reply."
+        try:
+            agent = create_react_agent(
+                model=model,
+                tools=self._build_tools(session=session, user_id=user_id),
+                prompt=self._system_prompt(profile),
+                checkpointer=self.memory,
+            )
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=user_text)]},
+                config={"configurable": {"thread_id": thread_id}},
+            )
+            messages = result.get("messages", [])
+            if not messages:
+                return "I'm here, but I couldn't generate a reply."
+            return str(getattr(messages[-1], "content", "")).strip() or "I'm here, but I couldn't generate a reply."
+        except Exception:
+            return self._fallback_reply(user_text)
 
     def _build_model(self):
         provider = self._choose_provider()
