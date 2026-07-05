@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import date
 from typing import Any
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -16,7 +16,15 @@ from telegram.ext import (
 
 from .config import Settings
 from .chat_graph import LangGraphChatService
-from .db import Database
+from .db import (
+    Database,
+    add_exercise_entry,
+    add_water_entry,
+    delete_meal_entry,
+    get_meal_entry,
+    meals_recent,
+    update_meal_entry,
+)
 from .models import ActivityLevel, Gender, HealthGoal
 from .schemas import OnboardingProfile
 from .service import MealTrackingService
@@ -39,6 +47,23 @@ ACTIVITY_OPTIONS = {
 }
 
 
+def build_main_menu() -> InlineKeyboardMarkup:
+    keyboard = [
+        [InlineKeyboardButton("Log meal", callback_data="menu:log_meal")],
+        [InlineKeyboardButton("Log water", callback_data="menu:log_water")],
+        [InlineKeyboardButton("Log exercise", callback_data="menu:log_exercise")],
+        [InlineKeyboardButton("Edit entry", callback_data="menu:edit_entry")],
+        [InlineKeyboardButton("View today", callback_data="menu:view_today")],
+        [InlineKeyboardButton("Summary", callback_data="menu:summary")],
+        [InlineKeyboardButton("History", callback_data="menu:history")],
+        [InlineKeyboardButton("Get tips", callback_data="menu:tips")],
+        [InlineKeyboardButton("Diet plan", callback_data="menu:diet_plan")],
+        [InlineKeyboardButton("Help", callback_data="menu:help")],
+        [InlineKeyboardButton("Edit my profile", callback_data="menu:edit_profile")],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     service: MealTrackingService = context.application.bot_data["service"]
     database: Database = context.application.bot_data["database"]
@@ -48,13 +73,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     with database.session() as session:
         profile = service.get_profile(session, user.id)
-        if profile:
-            await update.message.reply_text(
-                f"Welcome back, {profile.name}. Send a meal photo or use /today for your summary."
+        if profile and not context.user_data.get("editing_profile"):
+            await _reply_text(
+                update,
+                f"Welcome back, {profile.name}. Send a meal photo or use /today for your summary.",
+                reply_markup=build_main_menu(),
             )
             return ConversationHandler.END
 
-    await update.message.reply_text("Welcome to Meal Tracking Agent. What is your name?")
+    await _reply_text(
+        update,
+        "Hey! I'm your Meal Tracking Agent.\n"
+        "Snap a meal photo, log water or a workout, or just ask me a nutrition question —\n"
+        "I'll take it from there. Tap an option below to get started.",
+        reply_markup=build_main_menu(),
+    )
     return NAME
 
 
@@ -147,6 +180,7 @@ async def capture_activity(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     with database.session() as session:
         record, sample_plan = service.save_profile(session, profile)
 
+    context.user_data.pop("editing_profile", None)
     await update.message.reply_text(
         "Profile created successfully.\n"
         f"Daily targets: {record.calorie_target} kcal, {record.protein_target_g}g protein, "
@@ -180,7 +214,7 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Fats: {summary.fats_consumed_g}/{summary.fats_target_g} g"
     )
     lines.append(summary.status)
-    await update.message.reply_text("\n".join(lines))
+    await _reply_text(update, "\n".join(lines))
 
 
 async def month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -191,7 +225,7 @@ async def month(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     with database.session() as session:
         text = service.build_monthly_summary(session, user.id)
-    await update.message.reply_text(text)
+    await _reply_text(update, text)
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -244,9 +278,341 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "Send /start to onboard, then upload meal photos. You can also chat normally with the bot. Use /today for the current day summary and /month for monthly progress."
+    await _reply_text(
+        update,
+        "Send /start to onboard, then upload meal photos. You can also chat normally with the bot. Use /today for the current day summary and /month for monthly progress.",
     )
+
+
+async def _reply_text(update: Update, text: str, **kwargs: Any) -> None:
+    if getattr(update, "callback_query", None) and getattr(update.callback_query, "message", None):
+        await update.callback_query.message.reply_text(text, **kwargs)
+        return
+    if getattr(update, "message", None):
+        await update.message.reply_text(text, **kwargs)
+        return
+    raise RuntimeError("No message target available for reply")
+
+
+async def show_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await today(update, context)
+
+
+async def show_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await month(update, context)
+
+
+async def show_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await help_command(update, context)
+
+
+async def show_diet_plan(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    from .nutrition import sample_meal_plan
+
+    service: MealTrackingService = context.application.bot_data["service"]
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None:
+        return
+    with database.session() as session:
+        profile = service.get_profile(session, user.id)
+    if profile is None:
+        await _reply_text(update, "Create your profile first with /start so I can tailor a diet plan.")
+        return
+    plan = sample_meal_plan(HealthGoal(profile.goal))
+    await _reply_text(update, "Sample meal plan:\n- " + "\n- ".join(plan))
+
+
+async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None:
+        return
+    with database.session() as session:
+        recent = meals_recent(session, user.id, limit=6)
+    if not recent:
+        await _reply_text(update, "No meals logged yet.")
+        return
+    lines = [f"Recent entries for {user.id}:"]
+    for meal in recent:
+        lines.append(f"{meal.id}: {meal.meal_name} — {meal.calories:.0f} kcal ({meal.eaten_at.strftime('%H:%M')})")
+    await _reply_text(update, "\n".join(lines))
+
+
+async def show_tips(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_service: LangGraphChatService = context.application.bot_data["chat_service"]
+    meal_service: MealTrackingService = context.application.bot_data["service"]
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None:
+        return
+    with database.session() as session:
+        profile_record = meal_service.get_profile(session, user.id)
+        profile = None
+        if profile_record:
+            profile = OnboardingProfile(
+                telegram_user_id=profile_record.telegram_user_id,
+                chat_id=profile_record.chat_id,
+                name=profile_record.name,
+                goal=HealthGoal(profile_record.goal),
+                gender=Gender(profile_record.gender),
+                age=profile_record.age,
+                height_cm=profile_record.height_cm,
+                weight_kg=profile_record.weight_kg,
+                activity_level=ActivityLevel(profile_record.activity_level),
+            )
+        reply_text = chat_service.reply(
+            session=session,
+            user_id=user.id,
+            user_text="Give me one quick tip based on my intake so far today",
+            thread_id=f"telegram-tips-{user.id}",
+            profile=profile,
+        )
+    await _reply_text(update, reply_text)
+
+
+async def start_log_water(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["awaiting"] = "log_water"
+    await _reply_text(update, "How many glasses of water did you have?")
+
+
+async def start_log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["awaiting"] = "log_exercise"
+    await _reply_text(update, "How many minutes did you exercise? Please reply with a short description and minutes, for example: 'Walk 30'.")
+
+
+async def start_log_meal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["awaiting"] = "meal_text"
+    await _reply_text(update, "Please send a photo or describe the meal in a few words.")
+
+
+async def finish_log_water(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    try:
+        glasses = float(update.message.text.strip())
+    except (AttributeError, ValueError):
+        await _reply_text(update, "Please enter a number of glasses.")
+        return
+    with database.session() as session:
+        entry = add_water_entry(session, user.id, glasses)
+    await _reply_text(update, f"Logged {entry.glasses} glasses of water.")
+
+
+async def finish_log_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    text = update.message.text.strip()
+    parts = text.rsplit(" ", 1)
+    if len(parts) != 2:
+        await _reply_text(update, "Please reply like 'Walk 30'.")
+        return
+    description, minute_text = parts
+    try:
+        minutes = int(minute_text)
+    except ValueError:
+        await _reply_text(update, "Please reply like 'Walk 30'.")
+        return
+    with database.session() as session:
+        entry = add_exercise_entry(session, user.id, description, minutes)
+    await _reply_text(update, f"Logged {entry.description} for {entry.minutes} minutes.")
+
+
+async def finish_meal_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    service: MealTrackingService = context.application.bot_data["service"]
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    with database.session() as session:
+        profile_record = service.get_profile(session, user.id)
+        profile = None
+        if profile_record:
+            profile = OnboardingProfile(
+                telegram_user_id=profile_record.telegram_user_id,
+                chat_id=profile_record.chat_id,
+                name=profile_record.name,
+                goal=HealthGoal(profile_record.goal),
+                gender=Gender(profile_record.gender),
+                age=profile_record.age,
+                height_cm=profile_record.height_cm,
+                weight_kg=profile_record.weight_kg,
+                activity_level=ActivityLevel(profile_record.activity_level),
+            )
+        analysis, _ = service.analyze_and_log_meal(
+            session=session,
+            telegram_user_id=user.id,
+            profile=profile,
+            image_bytes=b"",
+            mime_type="image/jpeg",
+            file_id=None,
+        )
+    await _reply_text(update, f"Logged: {analysis.item_name} ({analysis.calories:.0f} kcal)")
+
+
+async def start_edit_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None:
+        return
+    with database.session() as session:
+        recent = meals_recent(session, user.id, limit=6)
+    if not recent:
+        await _reply_text(update, "You have no recent meals to edit.")
+        return
+    keyboard = []
+    for meal in recent:
+        keyboard.append([InlineKeyboardButton(f"{meal.id}: {meal.meal_name}", callback_data=f"menu:edit_entry:{meal.id}")])
+    await _reply_text(update, "Choose an entry to edit:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def handle_edit_entry_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    parts = query.data.split(":")
+    entry_id_text = parts[2] if len(parts) >= 3 else ""
+    database: Database = context.application.bot_data["database"]
+    with database.session() as session:
+        entry = get_meal_entry(session, int(entry_id_text))
+    if entry is None:
+        await _reply_text(update, "That entry could not be found.")
+        return
+    keyboard = [
+        [InlineKeyboardButton("Food description", callback_data=f"menu:edit_field:{entry.id}:meal_name")],
+        [InlineKeyboardButton("Calories", callback_data=f"menu:edit_field:{entry.id}:calories")],
+        [InlineKeyboardButton("Protein/Carbs/Fats", callback_data=f"menu:edit_field:{entry.id}:macros")],
+        [InlineKeyboardButton("Delete entry", callback_data=f"menu:delete_entry:{entry.id}")],
+    ]
+    await _reply_text(update, f"Entry {entry.id}: {entry.meal_name} — {entry.calories:.0f} kcal", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def handle_edit_field_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    parts = query.data.split(":")
+    if len(parts) < 4:
+        return
+    entry_id = int(parts[2])
+    field = parts[3]
+    if field == "delete_entry":
+        return
+    if field == "macros":
+        context.user_data["awaiting"] = f"edit_value:{entry_id}:macros"
+        await _reply_text(update, "Reply with the corrected values as 'protein carbs fats' (for example: '20 50 10').")
+        return
+    context.user_data["awaiting"] = f"edit_value:{entry_id}:{field}"
+    await _reply_text(update, "Send the corrected value.")
+
+
+async def finish_edit_value(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    database: Database = context.application.bot_data["database"]
+    user = update.effective_user
+    if user is None or update.message is None:
+        return
+    awaiting = context.user_data.get("awaiting")
+    if not isinstance(awaiting, str) or not awaiting.startswith("edit_value:"):
+        return
+    _, entry_id_text, field = awaiting.split(":", 2)
+    entry_id = int(entry_id_text)
+    text = update.message.text.strip()
+    with database.session() as session:
+        if field == "macros":
+            parts = text.split()
+            if len(parts) != 3:
+                await _reply_text(update, "Please reply like '20 50 10'.")
+                return
+            protein, carbs, fats = (float(parts[0]), float(parts[1]), float(parts[2]))
+            update_meal_entry(session, entry_id, protein_g=protein, carbs_g=carbs, fats_g=fats)
+        else:
+            if field == "calories":
+                value = float(text)
+            else:
+                value = text
+            update_meal_entry(session, entry_id, **{field: value})
+        entry = get_meal_entry(session, entry_id)
+    if entry is None:
+        await _reply_text(update, "That entry could not be found.")
+        return
+    await _reply_text(update, f"Updated entry {entry.id}: {entry.meal_name} — {entry.calories:.0f} kcal")
+
+
+async def delete_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None:
+        return
+    parts = query.data.split(":")
+    entry_id = int(parts[2]) if len(parts) >= 3 else 0
+    database: Database = context.application.bot_data["database"]
+    with database.session() as session:
+        deleted = delete_meal_entry(session, entry_id)
+    if deleted:
+        await _reply_text(update, "Entry deleted.")
+    else:
+        await _reply_text(update, "That entry could not be found.")
+
+
+async def start_edit_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data["editing_profile"] = True
+    context.user_data.pop("profile", None)
+    await start(update, context)
+
+
+async def route_free_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    awaiting = context.user_data.get("awaiting")
+    if isinstance(awaiting, str):
+        if awaiting == "log_water":
+            await finish_log_water(update, context)
+        elif awaiting == "log_exercise":
+            await finish_log_exercise(update, context)
+        elif awaiting == "meal_text":
+            await finish_meal_text(update, context)
+        elif awaiting.startswith("edit_value:"):
+            await finish_edit_value(update, context)
+        context.user_data.pop("awaiting", None)
+        return
+    await text_chat(update, context)
+
+
+async def menu_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    data = query.data or ""
+    if data == "menu:log_meal":
+        await start_log_meal(update, context)
+    elif data == "menu:log_water":
+        await start_log_water(update, context)
+    elif data == "menu:log_exercise":
+        await start_log_exercise(update, context)
+    elif data == "menu:edit_entry":
+        await start_edit_entry(update, context)
+    elif data.startswith("menu:edit_entry:"):
+        await handle_edit_entry_selected(update, context)
+    elif data.startswith("menu:edit_field:"):
+        await handle_edit_field_selected(update, context)
+    elif data.startswith("menu:delete_entry:"):
+        await delete_entry(update, context)
+    elif data == "menu:view_today":
+        await show_today(update, context)
+    elif data == "menu:summary":
+        await show_summary(update, context)
+    elif data == "menu:history":
+        await show_history(update, context)
+    elif data == "menu:tips":
+        await show_tips(update, context)
+    elif data == "menu:diet_plan":
+        await show_diet_plan(update, context)
+    elif data == "menu:help":
+        await show_help(update, context)
+    elif data == "menu:edit_profile":
+        await start_edit_profile(update, context)
 
 
 async def text_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -295,7 +661,10 @@ def build_application(
     application.bot_data["chat_service"] = chat_service
 
     onboarding = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(start_edit_profile, pattern="menu:edit_profile"),
+        ],
         states={
             NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, capture_name)],
             GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, capture_goal)],
@@ -309,9 +678,10 @@ def build_application(
     )
 
     application.add_handler(onboarding)
+    application.add_handler(CallbackQueryHandler(menu_callback_handler))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("today", today))
     application.add_handler(CommandHandler("month", month))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_chat))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, route_free_text))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     return application

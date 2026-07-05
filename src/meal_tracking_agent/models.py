@@ -67,3 +67,23 @@ class MealEntry(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     image_file_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     raw_analysis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    edited_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class WaterEntry(Base):
+    __tablename__ = "water_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    logged_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    glasses: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ExerciseEntry(Base):
+    __tablename__ = "exercise_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    telegram_user_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    logged_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True, nullable=False)
+    description: Mapped[str] = mapped_column(String(200), nullable=False)
+    minutes: Mapped[int] = mapped_column(Integer, nullable=False)

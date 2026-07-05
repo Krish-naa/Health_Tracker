@@ -7,7 +7,7 @@ from typing import Optional
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import Base, MealEntry, UserProfile
+from .models import Base, ExerciseEntry, MealEntry, UserProfile, WaterEntry
 from .schemas import MealAnalysis, MacroTargets, OnboardingProfile
 
 
@@ -138,3 +138,57 @@ def meals_for_month(session: Session, telegram_user_id: int, anchor: datetime) -
             .order_by(MealEntry.eaten_at.asc())
         ).all()
     )
+
+
+def get_meal_entry(session: Session, entry_id: int) -> Optional[MealEntry]:
+    return session.get(MealEntry, entry_id)
+
+
+def update_meal_entry(session: Session, entry_id: int, **fields: object) -> Optional[MealEntry]:
+    entry = session.get(MealEntry, entry_id)
+    if entry is None:
+        return None
+    for field, value in fields.items():
+        if value is None:
+            continue
+        setattr(entry, field, value)
+    entry.edited_at = datetime.utcnow()
+    session.commit()
+    session.refresh(entry)
+    return entry
+
+
+def delete_meal_entry(session: Session, entry_id: int) -> bool:
+    entry = session.get(MealEntry, entry_id)
+    if entry is None:
+        return False
+    session.delete(entry)
+    session.commit()
+    return True
+
+
+def meals_recent(session: Session, telegram_user_id: int, limit: int = 6) -> list[MealEntry]:
+    return list(
+        session.scalars(
+            select(MealEntry)
+            .where(MealEntry.telegram_user_id == telegram_user_id)
+            .order_by(MealEntry.eaten_at.desc())
+            .limit(limit)
+        ).all()
+    )
+
+
+def add_water_entry(session: Session, telegram_user_id: int, glasses: float) -> WaterEntry:
+    entry = WaterEntry(telegram_user_id=telegram_user_id, glasses=glasses)
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    return entry
+
+
+def add_exercise_entry(session: Session, telegram_user_id: int, description: str, minutes: int) -> ExerciseEntry:
+    entry = ExerciseEntry(telegram_user_id=telegram_user_id, description=description, minutes=minutes)
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    return entry

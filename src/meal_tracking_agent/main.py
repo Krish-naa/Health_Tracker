@@ -1,11 +1,18 @@
 from __future__ import annotations
 
-from .chat_graph import LangGraphChatService
-from .config import get_settings
-from .db import Database
-from .service import MealTrackingService
-from .scheduler import register_daily_report_job
-from .telegram_bot import build_application
+import sys
+from pathlib import Path
+
+SRC_ROOT = Path(__file__).resolve().parent.parent
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from meal_tracking_agent.chat_graph import LangGraphChatService
+from meal_tracking_agent.config import get_settings
+from meal_tracking_agent.db import Database
+from meal_tracking_agent.service import MealTrackingService
+from meal_tracking_agent.scheduler import register_daily_report_job
+from meal_tracking_agent.telegram_bot import build_application
 
 
 def main() -> None:

@@ -36,6 +36,17 @@ class MacroTargets(BaseModel):
     fats_g: int
 
 
+class WaterEntryDTO(BaseModel):
+    telegram_user_id: int
+    glasses: float
+
+
+class ExerciseEntryDTO(BaseModel):
+    telegram_user_id: int
+    description: str
+    minutes: int
+
+
 class DailySummary(BaseModel):
     title: str
     calories_target: int
